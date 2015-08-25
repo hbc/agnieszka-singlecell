@@ -23,3 +23,20 @@ python ../scripts/create_csv.py > agnieszka-singlecell.csv
 
 4) merge the samples together
 bcbio_prepare_samples.py --out merged --csv agnieszka-singlecell.csv
+
+5) get the appropriate bcbio template
+wget https://raw.githubusercontent.com/chapmanb/bcbio-nextgen/master/config/templates/illumina-rnaseq.yaml
+
+6) edit to map to mm10 and just trim polyA
+
+7) create template
+bcbio_nextgen.py -w template illumina-rnaseq.yaml agnieszka-singlecell-merged.csv data/merged/
+
+8) run the analysis
+cp scripts/run-analysis.sh agnieszka-singlecell-merged/work/.
+cd !$
+sbatch < run-analysis.sh
+
+9) final directory has the counts, final alignment files and other QC information
+
+10) run bcbio.rnaseq (http://www.github.com/roryk/bcbio.rnaseq) to generate a report.
