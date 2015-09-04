@@ -1,0 +1,309 @@
+---
+  html_document:
+    toc: true
+    highlight: zenburn
+    theme: united
+---
+
+```{r setup, echo=FALSE}
+knitr::opts_chunk$set(tidy=TRUE, highlight=TRUE, dev="png",
+               cache=FALSE, highlight=TRUE, autodep=TRUE, warning=FALSE, error=FALSE,
+               message=FALSE, prompt=TRUE, comment='', fig.cap='')
+```
+
+# Overview
+
+```{r qc-setup}
+library(ggplot2)
+library(reshape)
+library(gplots)
+library(edgeR)
+library(CHBUtils)
+library(pheatmap)
+project_summary = "/Users/rory/cache/agnieszka-singlecell/results/project-summary.csv"
+counts_file = "/Users/rory/cache/agnieszka-singlecell/results/combined.counts"
+cbPalette <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442",
+"#0072B2", "#D55E00", "#CC79A7")
+summarydata = data.frame(read.table(project_summary, header=TRUE, sep=","), row.names="Name", check.rows=FALSE)
+summarydata$Name = rownames(summarydata)
+summarydata = summarydata[order(summarydata$Name),]
+counts = read.table(counts_file, header=TRUE, row.names="id", check.names=FALSE)
+counts = counts[, order(colnames(counts))]
+colnames(counts) = gsub(".counts", "", colnames(counts))
+# this is a list of all non user-supplied metadata columns that could appear
+known_columns = c("Name", "X.GC", "Exonic.Rate", "Sequences.flagged.as.poor.quality",
+    "rRNA.rate", "Fragment.Length.Mean", "Intronic.Rate", "Intergenic.Rate",
+    "Mapping.Rate", "Quality.format", "Duplication.Rate.of.Mapped", "Mapped",
+    "rRNA", "Sequence.length", "Transcripts.Detected", "Mean.Per.Base.Cov.",
+    "Genes.Detected", "Unique.Starts.Per.Read", "unique_starts_per_read",
+    "complexity", "X5.3.bias")
+```
+
+```{r heatmap-function}
+get_heatmap_fn = function(summarydata) {
+    # return the pheatmap function with or without metadata
+    metadata = summarydata[, !colnames(summarydata) %in% known_columns, drop=FALSE]
+    if(ncol(metadata) == 0) {
+       return(pheatmap)
+    }
+    else {
+    # rownames(metadata) = summarydata$Name
+    heatmap_fn = function(data, ...) {
+        pheatmap(data, annotation=metadata, ...)
+    }
+    return(heatmap_fn)
+}}
+heatmap_fn = get_heatmap_fn(summarydata)
+```
+
+# Quality control metrics
+
+## Mapped reads
+```{r mapped-plot}
+ggplot(summarydata, aes(x=Name, y=Mapped)) +
+    theme_bw(base_size=10) +
+    theme(panel.grid.major = element_line(size = .5, color = "grey"),
+          axis.text.x = element_text(angle=90)) +
+    geom_bar(stat="identity") +
+    ylab("mapped reads") + xlab("")
+```
+
+## Genomic mapping rate
+```{r mapping-rate-plot}
+ggplot(summarydata, aes(x=Name, y=Mapping.Rate)) +
+    geom_bar(stat="identity") +
+    ylab("mapping rate") + xlab("") +
+    theme_bw(base_size=10) +
+    theme(panel.grid.major = element_line(size = .5, color = "grey"),
+          axis.text.x = element_text(angle=90))
+```
+
+## Number of genes detected
+```{r genes-detected-plot}
+dd = data.frame(Name=names(counts), Genes.Detected = colSums(counts > 0))
+ggplot(dd, aes(x=Name, y=Genes.Detected)) +
+    geom_bar(stat="identity") +
+    theme_bw(base_size=10) +
+    theme(panel.grid.major = element_line(size = .5, color = "grey"),
+          axis.text.x = element_text(angle=90)) +
+    ylab("genes detected") + xlab("")
+```
+
+## Gene detection saturation
+```{r saturation-plot}
+dd = data.frame(Mapped=summarydata$Mapped, Genes.Detected = colSums(counts > 0))
+ggplot(dd, aes(x=Mapped, y=Genes.Detected)) +
+    geom_point() +
+    theme_bw(base_size=10) +
+    theme(panel.grid.major = element_line(size = .5, color = "grey"),
+          axis.text.x = element_text(angle=90)) +
+    ylab("genes detected") + xlab("reads mapped")
+```
+
+## Exonic mapping rate
+```{r exonic-mapping-plot}
+ggplot(summarydata, aes(x=Name, y=Exonic.Rate)) +
+    geom_bar(stat="identity") +
+    theme_bw(base_size=10) +
+    theme(panel.grid.major = element_line(size = .5, color = "grey"),
+          axis.text.x = element_text(angle=90)) +
+    ylab("exonic mapping rate") + xlab("")
+```
+
+## rRNA mapping rate
+```{r rRNA-rate-plot}
+ggplot(summarydata, aes(x=Name, y=rRNA.rate)) +
+    geom_bar(stat="identity") +
+    theme_bw(base_size=10) +
+    theme(panel.grid.major = element_line(size = .5, color = "grey"),
+          axis.text.x = element_text(angle=90)) +
+    ylab("rRNA rate") + xlab("")
+```
+
+## Estimated fragment length of paired-end reads
+```{r fragment-length-plot}
+ggplot(summarydata, aes(x=Name, y=Fragment.Length.Mean)) +
+    geom_bar(stat="identity") +
+    theme_bw(base_size=10) +
+    theme(panel.grid.major = element_line(size = .5, color = "grey"),
+          axis.text.x = element_text(angle=90)) +
+    ylab("fragment length") + xlab("")
+```
+
+## Boxplot of log10 counts per gene
+```{r boxplot-raw}
+melted = melt(counts)
+colnames(melted) = c("sample", "count")
+melted$sample = factor(melted$sample)
+melted = melted[order(melted$sample),]
+melted$count = log(melted$count)
+ggplot(melted, aes(x=sample, y=count)) + geom_boxplot() +
+    theme_bw(base_size=10) +
+    theme(panel.grid.major = element_line(size = .5, color = "grey"),
+          axis.text.x = element_text(angle=90)) + xlab("")
+```
+
+## Boxplot of log10 TMM-normalized counts per gene
+Trimmed mean of M-values (TMM) normalization is described
+[here](http://genomebiology.com/2010/11/3/R25)
+
+Robinson, M. D., & Oshlack, A. (2010). A scaling normalization method for differential expression analysis of RNA-seq data. Genome Biology, 11(3). doi:10.1186/gb-2010-11-3-r25
+
+```{r boxplot-normalized}
+y = DGEList(counts=counts)
+y = calcNormFactors(y)
+normalized_counts = cpm(y, normalized.lib.sizes=TRUE)
+melted = melt(normalized_counts)
+colnames(melted) = c("gene", "sample", "count")
+melted$sample = factor(melted$sample)
+melted = melted[order(melted$sample),]
+melted$count = log(melted$count)
+ggplot(melted, aes(x=sample, y=count)) + geom_boxplot() +
+    theme_bw(base_size=10) +
+    theme(panel.grid.major = element_line(size = .5, color = "grey"),
+          axis.text.x = element_text(angle=90)) + xlab("")
+```
+
+## Density of log10 TMM-normalized counts
+```{r density-normalized}
+ggplot(melted, aes(x=count, group=sample)) +
+    geom_density() +
+    theme_bw(base_size=10) +
+    theme(panel.grid.major = element_line(size = .5, color = "grey"),
+          axis.text.x = element_text(angle=90)) + xlab("")
+```
+
+## Correlation (Pearson) heatmap of TMM-normalized counts
+```{r pearson-heatmap-normalized}
+heatmap_fn(cor(normalized_counts, method="pearson"))
+```
+
+## Correlation (Spearman) heatmap of TMM-normalized counts
+```{r spearman-heatmap-normalized}
+heatmap_fn(cor(normalized_counts, method="spearman"))
+```
+
+## MDS plot of TMM-normalized counts
+```{r mds-normalized}
+mds(normalized_counts, k=length(colnames(normalized_counts)) - 1)
+```
+
+## Heatmap of top 30 most expressed genes
+```{r top-count-genes, results='asis'}
+select = order(rowMeans(counts),decreasing=TRUE)[1:30]
+heatmap_fn(counts[select,])
+```
+
+## Heatmap by concordance correlation coefficient
+http://journals.plos.org/ploscompbiol/article?id=10.1371/journal.pcbi.1004075
+
+```{r propcor-heatmap}
+propcor = function(x, y) {
+    x = log(x + 0.1)
+    y = log(y + 0.1)
+    num = 2 * cov(x, y)
+    denom = var(x) + var(y)
+return(num/denom)}
+
+do_propcor = function(x) {
+     mat = list()
+     for(i in seq_len(ncol(x))) {
+         for(j in seq_len(ncol(x))) {
+        x2 = x[, i]
+        y2 = x[, j]
+        mat = c(mat, propcor(x2, y2)) } }
+    mat = unlist(mat)
+    mat = matrix(mat, ncol(x), ncol(x))
+    colnames(mat) = colnames(x)
+    rownames(mat) = colnames(x)
+    return(mat)}
+
+heatmap_fn(do_propcor(normalized_counts))
+```
+
+
+## Filter out unexpressed genes and samples with low total counts
+```{r filter-low-counts}
+condition = "cell"
+keep_cells = colSums(counts) > 1e4
+counts = counts[rowSums(counts) > 0,]
+counts = counts[, keep_cells]
+summarydata = summarydata[colnames(counts),]
+groups = summarydata[,condition]
+```
+
+```{r scde, eval=!file.exists("scde.table")}
+library(scde)
+n.cores = 1
+o.ifm = scde.error.models(counts=counts, groups=groups, n.cores=n.cores,
+                          threshold.segmentation=T, save.crossfit.plots=F,
+                          save.model.plots=F, verbose=1)
+valid.cells = o.ifm$corr.a > 0
+o.ifm = o.ifm[valid.cells,]
+groups = groups[valid.cells]
+counts = counts[valid.cells,]
+o.prior = scde.expression.prior(models=o.ifm, counts=counts, length.out=400,
+                                show.plot=F)
+ediff <- scde.expression.difference(o.ifm, counts, o.prior, groups=groups,
+                                    n.randomizations=100,
+                                    n.cores=n.cores, verbose=1)
+ediff$pvalue = pnorm(-(abs(ediff$Z))) * 2
+ediff$padj = p.adjust(ediff$pvalue)
+ediff = ediff[order(ediff$pvalue),]
+save(o.ifm, groups, counts, o.prior, ediff, file="scde.RData")
+```
+
+```{r add-symbol}
+load("scde.RData")
+library(biomaRt)
+mouse = useMart("ensembl", dataset="mmusculus_gene_ensembl")
+conversions = getBM(attributes=c("ensembl_gene_id", "mgi_symbol"), mart=mouse)
+matches = match(rownames(ediff), conversions$ensembl_gene_id)
+ediff$symbol = conversions$mgi_symbol[matches]
+write.table(ediff, file="singlecell_de.tsv", sep="\t", quote=FALSE,
+            row.names=TRUE, col.names=TRUE)
+```
+
+```{r seurat}
+library(Seurat)
+nbd.data = data.frame(log(counts + 1))
+cnames = paste(colnames(nbd.data), groups, sep="_")
+colnames(nbd.data) = cnames
+nbt = new("seurat", raw.data=nbd.data)
+nbt= setup(nbt, project="NBT", min.cells = 3, min.genes = 1000, is.expr=1,
+           names.delim="_", names.field=2)
+```
+
+Below we identify highly variable genes and use those to do PCA on the samples.
+
+```{r identify-variable-genes}
+nbt = mean.var.plot(nbt, y.cutoff=2, x.low.cutoff=2, fxn.x=expMean,
+                    fxn.y=logVarDivMean)
+length(nbt@var.genes)
+```
+
+## Below we calculate the weights for the first 10 components to pick out
+## the ones that explain most of the variance, then look at the separation along
+## those components.
+
+## ```{r pca-jackstraw}
+## nbt = pca(nbt, do.print=FALSE)
+## nbt = jackStraw(nbt, num.replicate=200, do.print=FALSE)
+## jackStrawPlot(nbt, PCs=1:6)
+## pca.plot(nbt, 1, 2, pt.size=2)
+## viz.pca(nbt, 1:2)
+## pca.plot(nbt, 3, 4, pt.size=2)
+## pca.plot(nbt, 5, 6, pt.size=2)
+
+## nbt=run_tsne(nbt,dims.use = 1:4,max_iter=2000)
+## tsne.plot(nbt,pt.size = 3)
+## ```
+
+## ```{r scde-heterogeneity, eval=!file.exists("knn.RData")}
+## knn <- knn.error.models(counts, k = ncol(counts)/4, n.cores = 2, min.count.threshold = 2, min.nonfailed = 5, max.model.plots = 10)
+## save(knn, file="knn.RData")
+## ```
+
+## ```{r varinfo}
+## load("knn.RData")
+## varinfo <- pagoda.varnorm(knn, counts = counts, trim = 3/ncol(counts), max.adj.var = 5, n.cores = 1, plot = TRUE)
