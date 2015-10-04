@@ -13,7 +13,7 @@ knitr::opts_chunk$set(tidy=TRUE, highlight=TRUE, dev="png",
 
 # Overview
 
-```{r qc-setup}
+```{r qc-setup, echo=FALSE}
 library(ggplot2)
 library(reshape)
 library(gplots)
@@ -39,7 +39,7 @@ known_columns = c("Name", "X.GC", "Exonic.Rate", "Sequences.flagged.as.poor.qual
     "complexity", "X5.3.bias")
 ```
 
-```{r heatmap-function}
+```{r heatmap-function, echo=FALSE}
 get_heatmap_fn = function(summarydata) {
     # return the pheatmap function with or without metadata
     metadata = summarydata[, !colnames(summarydata) %in% known_columns, drop=FALSE]
@@ -59,7 +59,7 @@ heatmap_fn = get_heatmap_fn(summarydata)
 # Quality control metrics
 
 ## Mapped reads
-```{r mapped-plot}
+```{r mapped-plot, echo=FALSE}
 ggplot(summarydata, aes(x=Name, y=Mapped)) +
     theme_bw(base_size=10) +
     theme(panel.grid.major = element_line(size = .5, color = "grey"),
@@ -67,6 +67,10 @@ ggplot(summarydata, aes(x=Name, y=Mapped)) +
     geom_bar(stat="identity") +
     ylab("mapped reads") + xlab("")
 ```
+
+The number of mapped reads varies among the samples but is within the range we
+were expecting, with an average of `r mean(summarydata$Mapped)` reads per
+sample. It is natural to have some variation here.
 
 ## Genomic mapping rate
 ```{r mapping-rate-plot}
@@ -77,6 +81,12 @@ ggplot(summarydata, aes(x=Name, y=Mapping.Rate)) +
     theme(panel.grid.major = element_line(size = .5, color = "grey"),
           axis.text.x = element_text(angle=90))
 ```
+
+The average genomic mapping rate is `r mean(summarydata$Mapping.Rate)`, which
+looks great. There are a couple cells that have very low mapping rates, likely
+those are cells that failed somehow, either there was an empty well or there was
+a problem with the library prep for that cell or something similar. This is a
+pretty common occurance.
 
 ## Number of genes detected
 ```{r genes-detected-plot}
@@ -89,6 +99,10 @@ ggplot(dd, aes(x=Name, y=Genes.Detected)) +
     ylab("genes detected") + xlab("")
 ```
 
+We can detect on average of `r mean(dd$Genes.Detected)` genes detected per
+cell, using a permissive definition of detected meaning there is at least one
+read in the gene.
+
 ## Gene detection saturation
 ```{r saturation-plot}
 dd = data.frame(Mapped=summarydata$Mapped, Genes.Detected = colSums(counts > 0))
@@ -100,6 +114,14 @@ ggplot(dd, aes(x=Mapped, y=Genes.Detected)) +
     ylab("genes detected") + xlab("reads mapped")
 ```
 
+The idea behind this plot is we can look at it and try to figure out if sequencing
+deeper would let us detect more genes. Here we can see that sequencing less
+than a million reads has a big dropoff for the number of genes detected. It
+looks like there is a pretty linear increase in genes detected other than that.
+However, sequencing six million reads instead of two million reads and
+sequencing around two million reads per sample is around the sweet spot
+for maximizing the number of genes we can detect.
+
 ## Exonic mapping rate
 ```{r exonic-mapping-plot}
 ggplot(summarydata, aes(x=Name, y=Exonic.Rate)) +
@@ -110,15 +132,10 @@ ggplot(summarydata, aes(x=Name, y=Exonic.Rate)) +
     ylab("exonic mapping rate") + xlab("")
 ```
 
-## rRNA mapping rate
-```{r rRNA-rate-plot}
-ggplot(summarydata, aes(x=Name, y=rRNA.rate)) +
-    geom_bar(stat="identity") +
-    theme_bw(base_size=10) +
-    theme(panel.grid.major = element_line(size = .5, color = "grey"),
-          axis.text.x = element_text(angle=90)) +
-    ylab("rRNA rate") + xlab("")
-```
+Less good is the exonic mapping rate, we have a lower number of reads
+mapping to exons. This indicates that although a high amount of the reads
+align to the genome, there is likely some genomic contamination, so the
+reads are not aligning where there are genes.
 
 ## Estimated fragment length of paired-end reads
 ```{r fragment-length-plot}
@@ -129,6 +146,11 @@ ggplot(summarydata, aes(x=Name, y=Fragment.Length.Mean)) +
           axis.text.x = element_text(angle=90)) +
     ylab("fragment length") + xlab("")
 ```
+
+The estimated fragment length is very small, this is an estimate of the size of
+the piece of RNA that was between the adapters. A tiny fragment size means the
+RNA was likely sheared too much in the library prepartion process, leading to
+many small fragments.
 
 ## Boxplot of log10 counts per gene
 ```{r boxplot-raw}
@@ -143,12 +165,10 @@ ggplot(melted, aes(x=sample, y=count)) + geom_boxplot() +
           axis.text.x = element_text(angle=90)) + xlab("")
 ```
 
+The overall distribution of counts per cell looks pretty nice, especially for
+a single cell dataset.
+
 ## Boxplot of log10 TMM-normalized counts per gene
-Trimmed mean of M-values (TMM) normalization is described
-[here](http://genomebiology.com/2010/11/3/R25)
-
-Robinson, M. D., & Oshlack, A. (2010). A scaling normalization method for differential expression analysis of RNA-seq data. Genome Biology, 11(3). doi:10.1186/gb-2010-11-3-r25
-
 ```{r boxplot-normalized}
 y = DGEList(counts=counts)
 y = calcNormFactors(y)
@@ -164,14 +184,8 @@ ggplot(melted, aes(x=sample, y=count)) + geom_boxplot() +
           axis.text.x = element_text(angle=90)) + xlab("")
 ```
 
-## Density of log10 TMM-normalized counts
-```{r density-normalized}
-ggplot(melted, aes(x=count, group=sample)) +
-    geom_density() +
-    theme_bw(base_size=10) +
-    theme(panel.grid.major = element_line(size = .5, color = "grey"),
-          axis.text.x = element_text(angle=90)) + xlab("")
-```
+Despite it being a single-cell dataset, TMM normalizing the reads does a nice job
+normalizing the cells so they have similar distributions.
 
 ## Correlation (Pearson) heatmap of TMM-normalized counts
 ```{r pearson-heatmap-normalized}
@@ -232,7 +246,7 @@ summarydata = summarydata[colnames(counts),]
 groups = summarydata[,condition]
 ```
 
-```{r scde, eval=!file.exists("scde.table")}
+```{r scde, eval=!file.exists("scde.RData")}
 library(scde)
 n.cores = 1
 o.ifm = scde.error.models(counts=counts, groups=groups, n.cores=n.cores,
@@ -264,17 +278,98 @@ write.table(ediff, file="singlecell_de.tsv", sep="\t", quote=FALSE,
             row.names=TRUE, col.names=TRUE)
 ```
 
+## More exploration
+
 ```{r seurat}
 library(Seurat)
-nbd.data = data.frame(log(counts + 1))
+scounts = counts
+scounts$id = rownames(scounts)
+scounts = merge(scounts, conversions, by.x="id", by.y="ensembl_gene_id")
+scounts = scounts[!duplicated(scounts$mgi_symbol),]
+rownames(scounts) = scounts$mgi_symbol
+scounts$mgi_symbol = NULL
+scounts$ensmbl_gene_id = NULL
+scounts$id = NULL
+scounts = scounts[rowSums(scounts > 0) > 5,]
+keep = colSums(scounts) > 10000
+
+nbd.data = data.frame(log(scounts + 1))
 cnames = paste(colnames(nbd.data), groups, sep="_")
 colnames(nbd.data) = cnames
 nbt = new("seurat", raw.data=nbd.data)
-nbt= setup(nbt, project="NBT", min.cells = 3, min.genes = 1000, is.expr=1,
+nbt = setup(nbt, project="NBT", min.cells = 3, min.genes = 1000, is.expr=1,
            names.delim="_", names.field=2)
 ```
 
-Below we identify highly variable genes and use those to do PCA on the samples.
+Here we look at Weissman's markers for LT-HSC, ST-HSC, Early-MPP and Late-MPP.
+
+LT-HSC : CD34−, CD38−, SCA-1+, Thy1.1+/lo, C-kit+, lin−, CD135−, Slamf1/CD150+
+
+ST-HSC : CD34+, CD38+, SCA-1+, Thy1.1+/lo, C-kit+, lin−, CD135−, Slamf1/CD150+, Mac-1 (CD11b)lo
+
+Early MPP : CD34+, SCA-1+, Thy1.1−, C-kit+, lin−, CD135+, Slamf1/CD150−, Mac-1 (CD11b)lo, CD4lo
+
+Late MPP : CD34+, SCA-1+, Thy1.1−, C-kit+, lin−, CD135high, Slamf1/CD150−, Mac-1 (CD11b)lo, CD4lo
+
+Here we look at the Slam markers for mouse, according to wikipedia
+which is:
+
+Mouse HSC : CD34lo/−, SCA-1+, Thy1.1+/lo, CD38+, C-kit+, lin−
+
+SCA-1 is Atxn1.
+
+```{r weissman-markers}
+vlnPlot(nbt, c("Cd34", "Cd38", "Atxn1", "Thy1", "Kit", "Flt3", "Slamf1"))
+```
+
+
+```{r slam-markers}
+vlnPlot(nbt, c("Cd34", "Slamf1", "Cd244", "Cd48", "Cd38", "Flt3"))
+```
+
+They are supposed to be positive for Cd38 but aren't, which is concerning.
+
+```{r fgd5-marker}
+vlnPlot(nbt, c("Fgd5", "Runx1t1", "Neo1", "Igf1", "Mpo", "Cd48", "Cd244",
+               "Bex6"))
+
+```
+Cd4 and Cd8a and Il7r and Ly6g all have symbols just aren't expressed.
+Ter119 is Ly76, we don't have that in the annotation.
+B220 is an isoform of Cd45 and we are aggregating at the gene level so we
+don't have that data here.
+Mac1 is Itgam and Itgb2.
+
+The lin- markers seem good.
+
+HSC = Lin-Ckit+Sca1+CD34-CD135-CD150+
+
+MPP-1 = Ckit+Lin-Sca1+CD34+CD135- (85% cells CD150- but did not sort on this)
+
+
+Sca1 is Ly6a
+Cd135 is Flt3
+Cd150 is Slamf1
+
+```{r digital-sorting}
+vlnPlot(nbt, c("Kit", "Ly6a", "Cd34", "Flt3", "Slamf1", "Cd38"))
+anno = data.frame(cell=groups)
+rownames(anno) = colnames(scounts)
+
+markers = c("Kit", "Ly6a", "Cd34", "Flt3", "Slamf1", "Cd38")
+pheatmap(log(scounts[markers,] + 1), fontsize=6, annotation=anno)
+
+library(tidyr)
+df = scounts
+df$id = rownames(df)
+df = melt(df[markers,]) %>%
+     separate("variable", into=c("well", "type"), sep="_")
+ggplot(df, aes(well, value, fill=type, color=type)) +
+   geom_bar(stat='identity', position='dodge') + facet_wrap(~ id) +
+   xlab("") +
+   theme_bw() +
+   theme(axis.ticks = element_blank(), axis.text.x = element_blank())
+```
 
 ```{r identify-variable-genes}
 nbt = mean.var.plot(nbt, y.cutoff=2, x.low.cutoff=2, fxn.x=expMean,
@@ -282,22 +377,44 @@ nbt = mean.var.plot(nbt, y.cutoff=2, x.low.cutoff=2, fxn.x=expMean,
 length(nbt@var.genes)
 ```
 
-## Below we calculate the weights for the first 10 components to pick out
-## the ones that explain most of the variance, then look at the separation along
-## those components.
+PCA of components 1 and 2 doesn't do a great job of separating out the
+HSC an MPP cells. It sort of separates some of the MPP and HSC cells
+but there are a set of MPP cells that cluster with the HSC cells.
 
-## ```{r pca-jackstraw}
-## nbt = pca(nbt, do.print=FALSE)
-## nbt = jackStraw(nbt, num.replicate=200, do.print=FALSE)
-## jackStrawPlot(nbt, PCs=1:6)
-## pca.plot(nbt, 1, 2, pt.size=2)
-## viz.pca(nbt, 1:2)
-## pca.plot(nbt, 3, 4, pt.size=2)
-## pca.plot(nbt, 5, 6, pt.size=2)
 
-## nbt=run_tsne(nbt,dims.use = 1:4,max_iter=2000)
-## tsne.plot(nbt,pt.size = 3)
-## ```
+```{r pca-jackstraw}
+nbt = pca(nbt, do.print=FALSE)
+pca.plot(nbt, 1, 2)
+```
+
+```{r component-1-genes}
+print.pca(nbt, 1)
+```
+
+```{r component-2-genes}
+print.pca(nbt, 2)
+```
+
+nbt = jackStraw(nbt, num.replicate=200, do.print=FALSE)
+viz.pca(nbt, 1:2)
+jackStrawPlot(nbt, PCs=1:6)
+pca.plot(nbt, 1, 2, pt.size=2)
+viz.pca(nbt, 1:2)
+pca.plot(nbt, 3, 4, pt.size=2)
+pca.plot(nbt, 5, 6, pt.size=2)
+
+nbt=run_tsne(nbt,dims.use = 1:4,max_iter=2000)
+tsne.plot(nbt,pt.size = 3)
+```
+Some unfinished notes are below.
+
+HSC = Ckit+Lin-Sca1+CD150+CD34-CD135-
+MPP = Ckit+Lin-Sca1+CD150-CD34+CD135+
+Below we calculate the weights for the first 10 components to pick out
+the ones that explain most of the variance, then look at the separation along
+those components.
+
+Lin - is maybe: CD3, CD14, CD19, CD20, and CD56.
 
 ## ```{r scde-heterogeneity, eval=!file.exists("knn.RData")}
 ## knn <- knn.error.models(counts, k = ncol(counts)/4, n.cores = 2, min.count.threshold = 2, min.nonfailed = 5, max.model.plots = 10)
