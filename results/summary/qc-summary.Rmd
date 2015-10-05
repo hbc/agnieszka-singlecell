@@ -346,7 +346,6 @@ HSC = Lin-Ckit+Sca1+CD34-CD135-CD150+
 
 MPP-1 = Ckit+Lin-Sca1+CD34+CD135- (85% cells CD150- but did not sort on this)
 
-
 Sca1 is Ly6a
 Cd135 is Flt3
 Cd150 is Slamf1
@@ -370,6 +369,56 @@ ggplot(df, aes(well, value, fill=type, color=type)) +
    theme_bw() +
    theme(axis.ticks = element_blank(), axis.text.x = element_blank())
 ```
+
+
+## Dirty microarray analysis
+I can't do a proper microarray analysis without the original CEL files, so here
+I just loaded the microarray values in and performed a differential expression
+test for each probeset with limma. I didn't normalize or anything so this is a
+super dirty list, but it is probably a lot better than just looking at fold changes.
+
+```{r microarrays}
+microarray = read.table("/Volumes/Clotho/Users/rory/cache/agnieszka-singlecell/metadata/Rossi_HSC_MPP_Microarray.csv", header=TRUE, sep=",", stringsAsFactors=FALSE)
+probe_symbol = microarray[, c(1, 2)]
+rownames(microarray) = microarray[, 1]
+microarray = microarray[, c(6, 7, 8, 9, 12, 13, 14, 15, 16)]
+colnames(microarray) = c("HSC_1", "HSC_2", "HSC_3", "HSC_4", "MPP_1", "MPP_2", "MPP_3", "MPP_4", "MPP_5")
+microarraysamples = data.frame(type=c("HSC", "HSC", "HSC", "HSC", "MPP", "MPP", "MPP", "MPP", "MPP"))
+rownames(microarraysamples) = colnames(microarray)
+microarray = log(microarray)
+design = model.matrix(~ type, data=microarraysamples)
+fit = lmFit(microarray, design)
+fit2 = eBayes(fit)
+mresults = topTable(fit2, adjust="BH", p.value=1, n=Inf)
+mresults = merge(mresults, probe_symbol, by.x="row.names", by.y="Probeset")
+rownames(mresults) = mresults$Row.names
+mresults$Row.names = NULL
+mresults = mresults[order(mresults$adj.P.Val),]
+```
+
+There is a very weak correlation between the log fold change in the gene
+array and the log fold change in the singlecell RNA-seq data.
+
+```{r singlecell-vs-microarray)
+in_both = intersect(ediff$symbol, mresults$Gene.Symbol)
+z = merge(ediff, mresults, by.x="symbol", by.y="Gene.Symbol")
+
+ggplot(z, aes(mle, -logFC)) + geom_point() + xlab("RNA-seq") + ylab("microarray") +
+    theme_bw()
+```
+
+However, there is a reasonable correlation between the fold change in the
+sorting genes between the microarray and RNA-seq data:
+
+```{r rnaseq-vs-microarray-markers}
+library(devtools)
+source_gist("524eade46135f6348140")
+ggplot(subset(z, symbol %in% markers), aes(mle, -logFC, label=mle)) +
+geom_point() + xlab("RNA-seq") + ylab("microarray") +
+    theme_bw() + stat_smooth_func(geom="text", method="lm", parse=TRUE, hjust=0) +
+    geom_smooth(method="lm", se=FALSE)
+```
+
 
 ```{r identify-variable-genes}
 nbt = mean.var.plot(nbt, y.cutoff=2, x.low.cutoff=2, fxn.x=expMean,
