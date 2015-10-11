@@ -7,7 +7,7 @@
 
 ```{r setup, echo=FALSE}
 knitr::opts_chunk$set(tidy=TRUE, highlight=TRUE, dev="png",
-               cache=FALSE, highlight=TRUE, autodep=TRUE, warning=FALSE, error=FALSE,
+               cache=TRUE, highlight=TRUE, autodep=TRUE, warning=FALSE, error=FALSE,
                message=FALSE, prompt=TRUE, comment='', fig.cap='')
 ```
 
@@ -297,7 +297,7 @@ nbd.data = data.frame(log(scounts + 1))
 cnames = paste(colnames(nbd.data), groups, sep="_")
 colnames(nbd.data) = cnames
 nbt = new("seurat", raw.data=nbd.data)
-nbt = setup(nbt, project="NBT", min.cells = 3, min.genes = 1000, is.expr=1,
+nbt = Seurat:::setup(nbt, project="NBT", min.cells = 3, min.genes = 1000, is.expr=1,
            names.delim="_", names.field=2)
 ```
 
@@ -399,7 +399,7 @@ mresults = mresults[order(mresults$adj.P.Val),]
 There is a very weak correlation between the log fold change in the gene
 array and the log fold change in the singlecell RNA-seq data.
 
-```{r singlecell-vs-microarray)
+```{r singlecell-vs-microarray}
 in_both = intersect(ediff$symbol, mresults$Gene.Symbol)
 z = merge(ediff, mresults, by.x="symbol", by.y="Gene.Symbol")
 
@@ -419,22 +419,25 @@ geom_point() + xlab("RNA-seq") + ylab("microarray") +
     geom_smooth(method="lm", se=FALSE)
 ```
 
+## principal component analysis
 
 ```{r identify-variable-genes}
 nbt = mean.var.plot(nbt, y.cutoff=2, x.low.cutoff=2, fxn.x=expMean,
                     fxn.y=logVarDivMean)
 length(nbt@var.genes)
 ```
-
 PCA of components 1 and 2 doesn't do a great job of separating out the
 HSC an MPP cells. It sort of separates some of the MPP and HSC cells
-but there are a set of MPP cells that cluster with the HSC cells.
-
+but there are a set of MPP cells that cluster with the HSC cells. The
+HSC cells don't appear to have any well defined subpopulations
+of cells.
 
 ```{r pca-jackstraw}
 nbt = pca(nbt, do.print=FALSE)
 pca.plot(nbt, 1, 2)
 ```
+
+Here are the genes that make up the first and second components:
 
 ```{r component-1-genes}
 print.pca(nbt, 1)
@@ -444,32 +447,251 @@ print.pca(nbt, 1)
 print.pca(nbt, 2)
 ```
 
-nbt = jackStraw(nbt, num.replicate=200, do.print=FALSE)
-viz.pca(nbt, 1:2)
-jackStrawPlot(nbt, PCs=1:6)
-pca.plot(nbt, 1, 2, pt.size=2)
-viz.pca(nbt, 1:2)
-pca.plot(nbt, 3, 4, pt.size=2)
-pca.plot(nbt, 5, 6, pt.size=2)
+It looks like there is maybe some heterogeneity in the MPP cells but
+there isn't very much heterogeneity in the HSC cells in terms of there
+being a few clear separate groups.
 
-nbt=run_tsne(nbt,dims.use = 1:4,max_iter=2000)
-tsne.plot(nbt,pt.size = 3)
+Just to demonstrate what you'd might expect from a clearer set of multiple
+cell types, here is an example dataset from Pollen et al where
+you can see a better separation of cells by a quick PCA plot:
+http://www.ncbi.nlm.nih.gov/pubmed/25086649
+
+```{r pollen-dataset}
+library(scde)
+library(Seurat)
+data(pollen)
+pollen = pollen[, colSums(pollen > 0)>2000]
+pollen = pollen[rowSums(pollen) > 10,]
+pollen = pollen[rowSums(pollen > 0) > 5,]
+pollen.data = data.frame(log(pollen + 1))
+pollen.data = pollen.data[, order(colnames(pollen.data))]
+x = paste("GW16", 1:25, sep="_")
+x = c(x, paste("GW21", 26:49, sep="_"))
+x = c(x, paste("NPC", 50:64, sep="_"))
+colnames(pollen.data) = x
+pr = prcomp(pollen.data)
+rot = pr$rotation
+ ggplot(data.frame(rot), aes(x=PC1, y=PC2, label=rownames(rot))) + geom_text() +
+     theme_bw()
 ```
-Some unfinished notes are below.
 
-HSC = Ckit+Lin-Sca1+CD150+CD34-CD135-
-MPP = Ckit+Lin-Sca1+CD150-CD34+CD135+
-Below we calculate the weights for the first 10 components to pick out
-the ones that explain most of the variance, then look at the separation along
-those components.
+I'm not sure what else we can do with this dataset if the main goal is to look
+at a subpopulations of HSCs, they look pretty homogeneous.
 
-Lin - is maybe: CD3, CD14, CD19, CD20, and CD56.
+We could look at the populations of MPPs, because it looks like there are three
+groups. One group off by itself, another group that clusters with the HSC cells
+and another group that is close to the HSC cells but does not cluster with them.
 
-## ```{r scde-heterogeneity, eval=!file.exists("knn.RData")}
-## knn <- knn.error.models(counts, k = ncol(counts)/4, n.cores = 2, min.count.threshold = 2, min.nonfailed = 5, max.model.plots = 10)
-## save(knn, file="knn.RData")
+```{r mpp-subpopulations}
+z = nbt@pca.rot
+z = z[grepl("MPP", rownames(z)),]
+mpp1 = rownames(z[z$PC1 < -0.1,])
+mpp2 = rownames(z[z$PC1 > -0.1 & z$PC2 > 0.09,])
+mpp3 = rownames(z[z$PC1 > -0.1 & z$PC2 < 0.09,])
+
+mpppca = z[c(mpp1, mpp2, mpp3),c("PC1", "PC2")]
+mpppca$group = c(rep("group1", length(mpp1)), rep("group2", length(mpp2)),
+                rep("group3", length(mpp3)))
+rownames(mpppca) = gsub("_MPP_MPP", "_MPP", rownames(mpppca))
+ggplot(mpppca, aes(x=PC1, y=PC2, color=group)) + geom_point() +
+     theme_bw()
+```
+
+
+
+
+
+## heterogeneity analysis of mpp subpopulations
+We could look for sets of genes that show more heterogeneity than expected
+in the three sets of MPP cells.
+
+```{r pagoda}
+cd = scounts
+cd = cd[,colnames(cd) %in% rownames(mpppca)]
+cd = cd[, colSums(cd > 0)>2000]
+cd = cd[rowSums(cd) > 10,]
+cd = cd[rowSums(cd > 0) > 5,]
+save(cd, mpppca, file="mpp.RData")
+```
+```{r pagoda-dont-eval, eval=FALSE}
+knn = knn.error.models(cd, groups=mpppca$group, k=ncol(cd)/3, n.cores=2,
+                       min.count.threshold=2, min.nonfailed=5, max.model.plots=1)
+varinfo <- pagoda.varnorm(knn, counts = cd, trim = 3/ncol(cd), max.adj.var = 5, n.cores = 1, plot = TRUE)
+varinfo <- pagoda.subtract.aspect(varinfo, colSums(cd[, rownames(knn)]>0))
+```
+
+```{r biomart-go, eval=FALSE}
+library(biomaRt)
+library(GO.db)
+ensembl = useMart("ensembl", dataset = "mmusculus_gene_ensembl")
+
+# Constructs a dataframe with two columns: hgnc_symbol and go_id
+# If rownames are Ensembl IDs, use ensembl_gene_id as filter value
+go = getBM(attributes = c("mgi_symbol", "go_id"), filters = "mgi_symbol", values = rownames(cd), mart = ensembl)
+
+# Use the GO.db library to add a column with the GO-term to the dataframe
+go$term = Term(go$go_id)
+
+# Create a named list of character vectors out of the df
+s = split(go$mgi_symbol, paste(go$go_id,go$term))
+
+# Saves the list as a R environment
+go.env = list2env(s)
+```
+
+pwpca <- pagoda.pathway.wPCA(varinfo, go.env, n.components = 1, n.cores = 1, n.internal.shuffles = 0)
+ clpca <- pagoda.gene.clusters(varinfo, trim = 7.1/ncol(varinfo$mat), n.clusters = 150, n.cores = 1, plot = TRUE)
+```
+
+```{r load-precalculated-pagoda}
+load("mpp_knn.RData")
+load("mpp_cluster.RData")
+```
+
+We can see clustering the cells by pathway doesn't recover the groups
+from the PCA:
+```{r pagoda-hc}
+df <- pagoda.top.aspects(pwpca, clpca, return.table = TRUE, plot = TRUE, z.score = 1.96)
+head(df)
+
+# get full info on the top aspects
+tam <- pagoda.top.aspects(pwpca, clpca, n.cells = NULL, z.score = qnorm(0.01/2, lower.tail = FALSE))
+hc <- pagoda.cluster.cells(tam, varinfo)
+hc2 = hc
+hc2$labels = mpppca[hc2$labels,]$group
+plot(hc2)
+```
+
+Breaking it up by pathways doesn't identify these three groups at all.
+
+```{r pagoda-aspects}
+tamr <- pagoda.reduce.loading.redundancy(tam, pwpca, clpca)
+tamr2 <- pagoda.reduce.redundancy(tamr, distance.threshold = 0.9, plot = TRUE, cell.clustering = hc, labRow = NA, labCol = NA, box = TRUE, margins = c(0.5, 0.5), trim = 0,)
+col.cols <- rbind(groups = cutree(hc, 3))
+l2cols <- c("red", "blue", "green")[factor(mpppca$group, levels=c("group1", "group2", "group3"))]
+names(l2cols) = rownames(mpppca)
+pagoda.view.aspects(tamr2, cell.clustering = hc, box = TRUE, labCol = NA, margins = c(0.5, 20), col.cols=l2cols)
+```
+
+## differential expression of MPP subgroups
+Instead of looking for genes with larger than expected variation between these
+three subgroups, instead we will look at pairwise comparisons of groups.
+
+## ## library(scde)
+## ## library(parallel)
+## ## cd = counts
+## ## cell.names <- colnames(cd); names(cell.names) <- cell.names;
+## ## p.self.fail <- scde.failure.probability(models=o.ifm,counts=cd)
+## ## n.simulations = 10
+## ## k = 0.9
+## ## n.cores=1
+## ## dl <- mclapply(1:n.simulations,function(i) {
+## ##   scd1 <- do.call(cbind,lapply(cell.names,function(nam) {
+## ##     x <- cd[,nam];
+## ##     # replace predicted drop outs with NAs
+## ##     x[!as.logical(rbinom(length(x),1,1-p.self.fail[,nam]*k))] <- NA;
+## ##     x;
+## ##     }))
+## ##   rownames(scd1) <- rownames(cd);
+## ##   # calculate correlation on the complete observation pairs
+## ##   cor(log10(scd1+1),use="pairwise.complete.obs");
+## ## },mc.cores=n.cores)
+
+## ## direct.dist <- Reduce("+",dl)/length(dl)
+## ## pheatmap(direct.dist, fontsize=6)
+
+## library(scde)
+## library(parallel)
+## knn = knn.error.models(counts, k=ncol(counts)/4, n.cores=1, min.count.threshold=2,
+##                         min.nonfailed=5, max.model.plots=10)
+
+## Agnieszka mentioned the primary purpose of the experiment was to look at
+## the HSC cells in particular, so lets focus drop the MPP cells for now
+## and just focus on those.
+
+## ```{r seurat-hsc-only}
+## library(Seurat)
+## scounts = counts
+## scounts$id = rownames(scounts)
+## scounts = merge(scounts, conversions, by.x="id", by.y="ensembl_gene_id")
+## scounts = scounts[!duplicated(scounts$mgi_symbol),]
+## rownames(scounts) = scounts$mgi_symbol
+## scounts$mgi_symbol = NULL
+## scounts$ensmbl_gene_id = NULL
+## scounts$id = NULL
+## scounts = scounts[rowSums(scounts > 0) > 5,]
+## keep = colSums(scounts) > 10000
+## hsc_counts = scounts[, groups == "HSC"]
+## hsc_groups = groups[groups == "HSC"]
+## nbd.data = data.frame(log(hsc_counts + 1))
+## cnames = paste(colnames(nbd.data), hsc_groups, sep="_")
+## colnames(nbd.data) = cnames
+## nbt = new("seurat", raw.data=nbd.data)
+## nbt = Seurat:::setup(nbt, project="NBT", min.cells = 3, min.genes = 1000, is.expr=1,
+##            names.delim="_", names.field=2)
+## nbt = mean.var.plot(nbt, y.cutoff=2, x.low.cutoff=2, fxn.x=expMean,
+##                     fxn.y=logVarDivMean)
+## length(nbt@var.genes)
+## nbt = pca(nbt, do.print=FALSE)
+## pca.plot(nbt, 1, 2)
 ## ```
 
-## ```{r varinfo}
-## load("knn.RData")
-## varinfo <- pagoda.varnorm(knn, counts = counts, trim = 3/ncol(counts), max.adj.var = 5, n.cores = 1, plot = TRUE)
+## We can see that there are a couple of more rare outlier cells in the HSC
+## cells, but that most of the cells cluster in a narrow PC1 band. There seems
+## to be more of a spread in PC2 however, but it doesn't look like a clear
+## separation of the cells.
+
+## ```{r jackstraw-hbc-only}
+## z = as.matrix(log(scounts + 1))
+## sig = permutationPA(z, B=300)
+## z = jackstraw(z,PC=1:13)
+
+## nbt=jackStraw(nbt,num.replicate = 500,do.print = FALSE)
+## z = jackStrawPlot(nbt,PCs = 1:10)
+
+## pcHeatmap(nbt, pc.use=2, do.balanced=FALSE)
+## nbt = pca(nbt, do.print=FALSE)
+
+## nbt=project.pca(nbt, do.print=FALSE)
+## pcHeatmap(nbt,pc.use = 1,use.full = TRUE,do.balanced = TRUE,remove.key = TRUE)
+## nbt.sig.genes=pca.sig.genes(nbt,1:9,pval.cut = 1e-5,max.per.pc = 200)
+
+## bt=run_tsne(nbt,dims.use = 1:11,max_iter=2000)
+## tsne.plot(bt)
+## bt=DBclust_dimension(bt,1,2,reduction.use = "tsne",G.use = 8,set.ident = TRUE)
+## tsne.plot(bt)
+
+## nbt.sig.genes=pca.sig.genes(nbt, pcs.use=1)
+
+## nbt = jackStraw(nbt, num.replicate=200)
+
+
+## nbt = jackStraw(nbt, num.replicate=200, do.print=FALSE)
+## viz.pca(nbt, 1:2)
+## jackStrawPlot(nbt, PCs=1:6)
+## pca.plot(nbt, 1, 2, pt.size=2)
+## viz.pca(nbt, 1:2)
+## pca.plot(nbt, 3, 4, pt.size=2)
+## pca.plot(nbt, 5, 6, pt.size=2)
+
+## nbt=run_tsne(nbt,dims.use = 1:4,max_iter=2000)
+## tsne.plot(nbt,pt.size = 3)
+## ```
+## Some unfinished notes are below.
+
+## HSC = Ckit+Lin-Sca1+CD150+CD34-CD135-
+## MPP = Ckit+Lin-Sca1+CD150-CD34+CD135+
+## Below we calculate the weights for the first 10 components to pick out
+## the ones that explain most of the variance, then look at the separation along
+## those components.
+
+## Lin - is maybe: CD3, CD14, CD19, CD20, and CD56.
+
+## ## ```{r scde-heterogeneity, eval=!file.exists("knn.RData")}
+## ## knn <- knn.error.models(counts, k = ncol(counts)/4, n.cores = 2, min.count.threshold = 2, min.nonfailed = 5, max.model.plots = 10)
+## ## save(knn, file="knn.RData")
+## ## ```
+
+## ## ```{r varinfo}
+## ## load("knn.RData")
+## ## varinfo <- pagoda.varnorm(knn, counts = counts, trim = 3/ncol(counts), max.adj.var = 5, n.cores = 1, plot = TRUE)
