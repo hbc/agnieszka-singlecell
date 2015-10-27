@@ -12,6 +12,12 @@ knitr::opts_chunk$set(tidy=TRUE, highlight=TRUE, dev="png",
 ```
 
 # Overview
+This was a pilot project to see if it was possible to pick out a subpopulation
+of single HSC cells. About 50 MPP and 50 HSC single cells were prepped using
+the SMART-seq protocol and the reads were sequenced to a depth of a couple million
+per cell. This is the second shot at this experiment, previously we had done some
+work with SCRB-seq sequencing which had more cells but at a lower depth and
+a lower library complexity.
 
 ```{r qc-setup, echo=FALSE}
 library(ggplot2)
@@ -187,54 +193,6 @@ ggplot(melted, aes(x=sample, y=count)) + geom_boxplot() +
 Despite it being a single-cell dataset, TMM normalizing the reads does a nice job
 normalizing the cells so they have similar distributions.
 
-## Correlation (Pearson) heatmap of TMM-normalized counts
-```{r pearson-heatmap-normalized}
-heatmap_fn(cor(normalized_counts, method="pearson"))
-```
-
-## Correlation (Spearman) heatmap of TMM-normalized counts
-```{r spearman-heatmap-normalized}
-heatmap_fn(cor(normalized_counts, method="spearman"))
-```
-
-## MDS plot of TMM-normalized counts
-```{r mds-normalized}
-mds(normalized_counts, k=length(colnames(normalized_counts)) - 1)
-```
-
-## Heatmap of top 30 most expressed genes
-```{r top-count-genes, results='asis'}
-select = order(rowMeans(counts),decreasing=TRUE)[1:30]
-heatmap_fn(counts[select,])
-```
-
-## Heatmap by concordance correlation coefficient
-http://journals.plos.org/ploscompbiol/article?id=10.1371/journal.pcbi.1004075
-
-```{r propcor-heatmap}
-propcor = function(x, y) {
-    x = log(x + 0.1)
-    y = log(y + 0.1)
-    num = 2 * cov(x, y)
-    denom = var(x) + var(y)
-return(num/denom)}
-
-do_propcor = function(x) {
-     mat = list()
-     for(i in seq_len(ncol(x))) {
-         for(j in seq_len(ncol(x))) {
-        x2 = x[, i]
-        y2 = x[, j]
-        mat = c(mat, propcor(x2, y2)) } }
-    mat = unlist(mat)
-    mat = matrix(mat, ncol(x), ncol(x))
-    colnames(mat) = colnames(x)
-    rownames(mat) = colnames(x)
-    return(mat)}
-
-heatmap_fn(do_propcor(normalized_counts))
-```
-
 
 ## Filter out unexpressed genes and samples with low total counts
 ```{r filter-low-counts}
@@ -246,6 +204,9 @@ summarydata = summarydata[colnames(counts),]
 groups = summarydata[,condition]
 ```
 
+## Totally naive HSC-MPP DE analysis
+Looking at just the differences between the HSC and MPP cell types, we
+can find some global differences.
 ```{r scde, eval=!file.exists("scde.RData")}
 library(scde)
 n.cores = 1
@@ -278,7 +239,9 @@ write.table(ediff, file="singlecell_de.tsv", sep="\t", quote=FALSE,
             row.names=TRUE, col.names=TRUE)
 ```
 
-## More exploration
+## Marker exploration
+Here we look at some of the markers that were used to sort to see if
+we can see the RNA-seq data matches the sorting markers.
 
 ```{r seurat}
 library(Seurat)
@@ -419,7 +382,10 @@ geom_point() + xlab("RNA-seq") + ylab("microarray") +
     geom_smooth(method="lm", se=FALSE)
 ```
 
-## principal component analysis
+## PCA of single cell data
+If there are subpopulations in the single-cell data we should be able to see
+them in a PCA plot. Here we tae the most variable genes between the datasets
+and perform PCA on them to see if they separate into groups.
 
 ```{r identify-variable-genes}
 nbt = mean.var.plot(nbt, y.cutoff=2, x.low.cutoff=2, fxn.x=expMean,
@@ -451,6 +417,15 @@ It looks like there is maybe some heterogeneity in the MPP cells but
 there isn't very much heterogeneity in the HSC cells in terms of there
 being a few clear separate groups.
 
+Looking at higher order components also doesn't separate out the HSC
+cells into any subpopulations.
+
+```{r pca-3-4}
+pca.plot(nbt, 3, 4)
+pca.plot(nbt, 5, 6)
+pca.plot(nbt, 7, 8)
+```
+
 Just to demonstrate what you'd might expect from a clearer set of multiple
 cell types, here is an example dataset from Pollen et al where
 you can see a better separation of cells by a quick PCA plot:
@@ -476,7 +451,8 @@ rot = pr$rotation
 ```
 
 I'm not sure what else we can do with this dataset if the main goal is to look
-at a subpopulations of HSCs, they look pretty homogeneous.
+at a subpopulations of HSCs, they are very homogeneous and we don't have very
+many cells.
 
 We could look at the populations of MPPs, because it looks like there are three
 groups. One group off by itself, another group that clusters with the HSC cells
@@ -497,13 +473,90 @@ ggplot(mpppca, aes(x=PC1, y=PC2, color=group)) + geom_point() +
      theme_bw()
 ```
 
+```{r conversions}
+library(biomaRt)
+mouse = useMart("ensembl", dataset="mmusculus_gene_ensembl")
+conversions = getBM(attributes=c("ensembl_gene_id", "mgi_symbol"), mart=mouse)
+```
 
+## differential expression in MPP subpopulations
+```{r scde-mpp-setup, cache=FALSE}
+cd = counts
+cd$id = rownames(cd)
+cd = merge(cd, conversions, by.x="id", by.y="ensembl_gene_id")
+cd = cd[!duplicated(cd$mgi_symbol),]
+rownames(cd) = cd$mgi_symbol
+cd$mgi_symbol = NULL
+cd$ensmbl_gene_id = NULL
+cd$id = NULL
+cd = cd[,colnames(cd) %in% rownames(mpppca)]
+cd = cd[, colSums(cd > 0)>2000]
+cd = cd[rowSums(cd) > 10,]
+cd = cd[rowSums(cd > 0) > 5,]
+```
 
+```{r scde-mpp, eval=!file.exists("error_models-mpp.RData")}
+o.ifm <- scde.error.models(counts = cd, groups = mpppca$group, n.cores = 1,
+threshold.segmentation = TRUE, save.crossfit.plots = FALSE,
+save.model.plots = FALSE, verbose = 1)
+save(cd, o.ifm, file="error_models-mpp.RData")
+```
 
+```{r scde-mpp-load, cache=FALSE}
+load("error_models-mpp.RData")
+valid.cells <- o.ifm$corr.a > 0
+o.ifm = o.ifm[valid.cells,]
+o.prior <- scde.expression.prior(models = o.ifm, counts = cd, length.out = 400,
+ show.plot=TRUE)
+groups = mpppca$group
+names(groups) = row.names(o.ifm)
+```
 
-## heterogeneity analysis of mpp subpopulations
-We could look for sets of genes that show more heterogeneity than expected
-in the three sets of MPP cells.
+```{r g1-vs-g2, results='asis', cache=FALSE}
+g1_vs_g2 = factor(c(groups[groups == "group1"], groups[groups == "group2"]))
+g1_vs_g2_counts = cd[, names(g1_vs_g2)]
+g1_vs_g2_ifm = o.ifm[names(g1_vs_g2),]
+ediff <- scde.expression.difference(g1_vs_g2_ifm, g1_vs_g2_counts,
+o.prior, groups = g1_vs_g2, n.randomizations  =  100, n.cores  =  1, verbose  =  1)
+ediff$pvalue = pnorm(-(abs(ediff$Z))) * 2
+ediff$padj = p.adjust(ediff$pvalue)
+ediff = ediff[order(ediff$pvalue),]
+knitr::kable(head(ediff, 25))
+```
+
+```{r g1-vs-g3, results='asis', cache=FALSE}
+g1_vs_g3 = factor(c(groups[groups == "group1"], groups[groups == "group3"]))
+g1_vs_g3_counts = cd[, names(g1_vs_g3)]
+g1_vs_g3_ifm = o.ifm[names(g1_vs_g3),]
+ediff <- scde.expression.difference(g1_vs_g3_ifm, g1_vs_g3_counts,
+o.prior, groups = g1_vs_g3, n.randomizations  =  100, n.cores  =  1, verbose  =  1)
+ediff$pvalue = pnorm(-(abs(ediff$Z))) * 2
+ediff$padj = p.adjust(ediff$pvalue)
+ediff = ediff[order(ediff$pvalue),]
+knitr::kable(head(ediff, 25))
+```
+
+```{r g2-vs-g3, results='asis'}
+g2_vs_g3 = factor(c(groups[groups == "group2"], groups[groups == "group3"]))
+g2_vs_g3_counts = cd[, names(g2_vs_g3)]
+g2_vs_g3_ifm = o.ifm[names(g2_vs_g3),]
+ediff <- scde.expression.difference(g2_vs_g3_ifm, g2_vs_g3_counts,
+o.prior, groups = g2_vs_g3, n.randomizations  =  100, n.cores  =  1, verbose  =  1)
+ediff$pvalue = pnorm(-(abs(ediff$Z))) * 2
+ediff$padj = p.adjust(ediff$pvalue)
+ediff = ediff[order(ediff$pvalue),]
+knitr::kable(head(ediff, 25))
+```
+
+These results aren't too impressive.
+
+## heterogeneity analysis of MPP subpopulations
+We could look for sets of genes that show more variation than expected in the
+three sets of mpp cells. We do this with Pagoda, in the SCDE package. The idea
+behind this is that we might be able to pull out more signal by looking at sets
+of genes amongst the three groups. I did this for the MPP populations using
+Pagoda, but the results were not very good. We'll use GO terms as the
+gene sets here.
 
 ```{r pagoda}
 cd = scounts
@@ -511,187 +564,82 @@ cd = cd[,colnames(cd) %in% rownames(mpppca)]
 cd = cd[, colSums(cd > 0)>2000]
 cd = cd[rowSums(cd) > 10,]
 cd = cd[rowSums(cd > 0) > 5,]
-save(cd, mpppca, file="mpp.RData")
+save(cd, mpppca, file="mpp.rdata")
 ```
 ```{r pagoda-dont-eval, eval=FALSE}
 knn = knn.error.models(cd, groups=mpppca$group, k=ncol(cd)/3, n.cores=2,
                        min.count.threshold=2, min.nonfailed=5, max.model.plots=1)
-varinfo <- pagoda.varnorm(knn, counts = cd, trim = 3/ncol(cd), max.adj.var = 5, n.cores = 1, plot = TRUE)
-varinfo <- pagoda.subtract.aspect(varinfo, colSums(cd[, rownames(knn)]>0))
+varinfo <- pagoda.varnorm(knn, counts = cd, trim = 3/ncol(cd), max.adj.var = 5, n.cores = 1, plot = true)
+varinfo <- pagoda.subtract.aspect(varinfo, colsums(cd[, rownames(knn)]>0))
 ```
 
 ```{r biomart-go, eval=FALSE}
-library(biomaRt)
-library(GO.db)
-ensembl = useMart("ensembl", dataset = "mmusculus_gene_ensembl")
+library(biomart)
+library(go.db)
+ensembl = usemart("ensembl", dataset = "mmusculus_gene_ensembl")
 
-# Constructs a dataframe with two columns: hgnc_symbol and go_id
-# If rownames are Ensembl IDs, use ensembl_gene_id as filter value
-go = getBM(attributes = c("mgi_symbol", "go_id"), filters = "mgi_symbol", values = rownames(cd), mart = ensembl)
+# constructs a dataframe with two columns: hgnc_symbol and go_id
+# if rownames are ensembl ids, use ensembl_gene_id as filter value
+go = getbm(attributes = c("mgi_symbol", "go_id"), filters = "mgi_symbol", values = rownames(cd), mart = ensembl)
 
-# Use the GO.db library to add a column with the GO-term to the dataframe
-go$term = Term(go$go_id)
+# use the go.db library to add a column with the go-term to the dataframe
+go$term = term(go$go_id)
 
-# Create a named list of character vectors out of the df
+# create a named list of character vectors out of the df
 s = split(go$mgi_symbol, paste(go$go_id,go$term))
 
-# Saves the list as a R environment
+# saves the list as a r environment
 go.env = list2env(s)
 ```
 
+Here we look at the magnitude of the first principal component for each gene set
+defined in the GO ontologies:
+
+```{r long-use-cached, eval=FALSE}
 pwpca <- pagoda.pathway.wPCA(varinfo, go.env, n.components = 1, n.cores = 1, n.internal.shuffles = 0)
- clpca <- pagoda.gene.clusters(varinfo, trim = 7.1/ncol(varinfo$mat), n.clusters = 150, n.cores = 1, plot = TRUE)
+clpca <- pagoda.gene.clusters(varinfo, trim = 7.1/ncol(varinfo$mat), n.clusters = 150, n.cores = 1, plot = true)
 ```
 
 ```{r load-precalculated-pagoda}
-load("mpp_knn.RData")
-load("mpp_cluster.RData")
+load("mpp_knn.rdata")
+load("mpp_cluster.rdata")
 ```
 
-We can see clustering the cells by pathway doesn't recover the groups
-from the PCA:
 ```{r pagoda-hc}
 df <- pagoda.top.aspects(pwpca, clpca, return.table = TRUE, plot = TRUE, z.score = 1.96)
 head(df)
-
 # get full info on the top aspects
 tam <- pagoda.top.aspects(pwpca, clpca, n.cells = NULL, z.score = qnorm(0.01/2, lower.tail = FALSE))
 hc <- pagoda.cluster.cells(tam, varinfo)
 hc2 = hc
-hc2$labels = mpppca[hc2$labels,]$group
+hc2$labels = mpppca[hc2$order,]$group
 plot(hc2)
 ```
 
-Breaking it up by pathways doesn't identify these three groups at all.
+Breaking it up by pathways doesn't identify these three groups very well. It
+looks like there is a block of pathways that might separate out part of
+group 1, but those are GO terms that share many of the same genes. The
+heatmap below shows the most significant pathways if we take into account
+the sharing across the genes. They don't do a great job picking out
+the subgroups (red is group 1, blue is group2 and green is group3).
 
 ```{r pagoda-aspects}
 tamr <- pagoda.reduce.loading.redundancy(tam, pwpca, clpca)
-tamr2 <- pagoda.reduce.redundancy(tamr, distance.threshold = 0.9, plot = TRUE, cell.clustering = hc, labRow = NA, labCol = NA, box = TRUE, margins = c(0.5, 0.5), trim = 0,)
+tamr2 <- pagoda.reduce.redundancy(tamr, distance.threshold = 0.9, plot = TRUE, cell.clustering = hc, labrow = NA, labcol = NA, box = TRUE, margins = c(0.5, 0.5), trim = 0,)
 col.cols <- rbind(groups = cutree(hc, 3))
 l2cols <- c("red", "blue", "green")[factor(mpppca$group, levels=c("group1", "group2", "group3"))]
 names(l2cols) = rownames(mpppca)
-pagoda.view.aspects(tamr2, cell.clustering = hc, box = TRUE, labCol = NA, margins = c(0.5, 20), col.cols=l2cols)
+pagoda.view.aspects(tamr2, cell.clustering = hc, box = TRUE, labcol = NA, margins = c(0.5, 20), col.cols=l2cols)
 ```
 
-## differential expression of MPP subgroups
-Instead of looking for genes with larger than expected variation between these
-three subgroups, instead we will look at pairwise comparisons of groups.
+## wrapup
+It seems like for single cell analyses we need a large number of cells if the
+goal is to do any kind of heterogeneity analysis within a subpopulation. Most
+of the successful single-cell papers are solving a much easier problem, looking
+at different cell types which are much easier to separate.
 
-## ## library(scde)
-## ## library(parallel)
-## ## cd = counts
-## ## cell.names <- colnames(cd); names(cell.names) <- cell.names;
-## ## p.self.fail <- scde.failure.probability(models=o.ifm,counts=cd)
-## ## n.simulations = 10
-## ## k = 0.9
-## ## n.cores=1
-## ## dl <- mclapply(1:n.simulations,function(i) {
-## ##   scd1 <- do.call(cbind,lapply(cell.names,function(nam) {
-## ##     x <- cd[,nam];
-## ##     # replace predicted drop outs with NAs
-## ##     x[!as.logical(rbinom(length(x),1,1-p.self.fail[,nam]*k))] <- NA;
-## ##     x;
-## ##     }))
-## ##   rownames(scd1) <- rownames(cd);
-## ##   # calculate correlation on the complete observation pairs
-## ##   cor(log10(scd1+1),use="pairwise.complete.obs");
-## ## },mc.cores=n.cores)
-
-## ## direct.dist <- Reduce("+",dl)/length(dl)
-## ## pheatmap(direct.dist, fontsize=6)
-
-## library(scde)
-## library(parallel)
-## knn = knn.error.models(counts, k=ncol(counts)/4, n.cores=1, min.count.threshold=2,
-##                         min.nonfailed=5, max.model.plots=10)
-
-## Agnieszka mentioned the primary purpose of the experiment was to look at
-## the HSC cells in particular, so lets focus drop the MPP cells for now
-## and just focus on those.
-
-## ```{r seurat-hsc-only}
-## library(Seurat)
-## scounts = counts
-## scounts$id = rownames(scounts)
-## scounts = merge(scounts, conversions, by.x="id", by.y="ensembl_gene_id")
-## scounts = scounts[!duplicated(scounts$mgi_symbol),]
-## rownames(scounts) = scounts$mgi_symbol
-## scounts$mgi_symbol = NULL
-## scounts$ensmbl_gene_id = NULL
-## scounts$id = NULL
-## scounts = scounts[rowSums(scounts > 0) > 5,]
-## keep = colSums(scounts) > 10000
-## hsc_counts = scounts[, groups == "HSC"]
-## hsc_groups = groups[groups == "HSC"]
-## nbd.data = data.frame(log(hsc_counts + 1))
-## cnames = paste(colnames(nbd.data), hsc_groups, sep="_")
-## colnames(nbd.data) = cnames
-## nbt = new("seurat", raw.data=nbd.data)
-## nbt = Seurat:::setup(nbt, project="NBT", min.cells = 3, min.genes = 1000, is.expr=1,
-##            names.delim="_", names.field=2)
-## nbt = mean.var.plot(nbt, y.cutoff=2, x.low.cutoff=2, fxn.x=expMean,
-##                     fxn.y=logVarDivMean)
-## length(nbt@var.genes)
-## nbt = pca(nbt, do.print=FALSE)
-## pca.plot(nbt, 1, 2)
-## ```
-
-## We can see that there are a couple of more rare outlier cells in the HSC
-## cells, but that most of the cells cluster in a narrow PC1 band. There seems
-## to be more of a spread in PC2 however, but it doesn't look like a clear
-## separation of the cells.
-
-## ```{r jackstraw-hbc-only}
-## z = as.matrix(log(scounts + 1))
-## sig = permutationPA(z, B=300)
-## z = jackstraw(z,PC=1:13)
-
-## nbt=jackStraw(nbt,num.replicate = 500,do.print = FALSE)
-## z = jackStrawPlot(nbt,PCs = 1:10)
-
-## pcHeatmap(nbt, pc.use=2, do.balanced=FALSE)
-## nbt = pca(nbt, do.print=FALSE)
-
-## nbt=project.pca(nbt, do.print=FALSE)
-## pcHeatmap(nbt,pc.use = 1,use.full = TRUE,do.balanced = TRUE,remove.key = TRUE)
-## nbt.sig.genes=pca.sig.genes(nbt,1:9,pval.cut = 1e-5,max.per.pc = 200)
-
-## bt=run_tsne(nbt,dims.use = 1:11,max_iter=2000)
-## tsne.plot(bt)
-## bt=DBclust_dimension(bt,1,2,reduction.use = "tsne",G.use = 8,set.ident = TRUE)
-## tsne.plot(bt)
-
-## nbt.sig.genes=pca.sig.genes(nbt, pcs.use=1)
-
-## nbt = jackStraw(nbt, num.replicate=200)
-
-
-## nbt = jackStraw(nbt, num.replicate=200, do.print=FALSE)
-## viz.pca(nbt, 1:2)
-## jackStrawPlot(nbt, PCs=1:6)
-## pca.plot(nbt, 1, 2, pt.size=2)
-## viz.pca(nbt, 1:2)
-## pca.plot(nbt, 3, 4, pt.size=2)
-## pca.plot(nbt, 5, 6, pt.size=2)
-
-## nbt=run_tsne(nbt,dims.use = 1:4,max_iter=2000)
-## tsne.plot(nbt,pt.size = 3)
-## ```
-## Some unfinished notes are below.
-
-## HSC = Ckit+Lin-Sca1+CD150+CD34-CD135-
-## MPP = Ckit+Lin-Sca1+CD150-CD34+CD135+
-## Below we calculate the weights for the first 10 components to pick out
-## the ones that explain most of the variance, then look at the separation along
-## those components.
-
-## Lin - is maybe: CD3, CD14, CD19, CD20, and CD56.
-
-## ## ```{r scde-heterogeneity, eval=!file.exists("knn.RData")}
-## ## knn <- knn.error.models(counts, k = ncol(counts)/4, n.cores = 2, min.count.threshold = 2, min.nonfailed = 5, max.model.plots = 10)
-## ## save(knn, file="knn.RData")
-## ## ```
-
-## ## ```{r varinfo}
-## ## load("knn.RData")
-## ## varinfo <- pagoda.varnorm(knn, counts = counts, trim = 3/ncol(counts), max.adj.var = 5, n.cores = 1, plot = TRUE)
+[This](http://genome.cshlp.org/content/early/2015/10/01/gr.192237.115.abstract)
+paper that Agnieska sent has a similar type of experiment, also using SMART-seq data.
+They sequenced about 1,000 cells and were looking at LT-HSCS, ST-HSCS and MPPs.
+I think this scale of doing single-cell sequencing would be more appropriate
+to do the analyses of unknown subpopulations.
